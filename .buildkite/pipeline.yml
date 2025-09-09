@@ -1,0 +1,5 @@
+steps:
+  - label: ":pipeline: Checkout code"
+    commands:
+      - git checkout $BUILDKITE_COMMIT
+      - echo "Testing"
