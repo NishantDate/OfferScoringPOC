@@ -18,5 +18,4 @@ resource "kubectl_manifest" "allow_my_ip" {
             ipBlocks:
             - "${var.allow_cidr}"
   YAML
-  depends_on = [helm_release.istio_ingress]
 }

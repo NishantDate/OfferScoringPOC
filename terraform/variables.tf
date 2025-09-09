@@ -36,7 +36,7 @@ variable "azs" {
 
 variable "instance_type" {
   type    = string
-  default = "t4g.large"
+  default = "t4g.medium"
 }
 
 variable "node_disk_gb" {
@@ -46,7 +46,7 @@ variable "node_disk_gb" {
 
 variable "istio_chart_version" {
   type    = string
-  default = "1.27.0"
+  default = "1.26.1"
 }
 
 variable "gateway_listen_port" {
