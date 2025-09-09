@@ -29,17 +29,32 @@ variable "vpc_cidr" {
   default = "10.0.0.0/16"
 }
 
-variable "az" {
-  type    = string
-  default = "us-east-1a"
+variable "azs" {
+  type    = list(any)
+  default = ["us-east-1a", "us-east-1b"]
 } # single AZ to stay cheap
 
 variable "instance_type" {
   type    = string
-  default = "t4g.large"
+  default = "t4g.medium"
 }
 
 variable "node_disk_gb" {
   type    = number
   default = 20
+}
+
+variable "istio_chart_version" {
+  type    = string
+  default = "1.26.1"
+}
+
+variable "gateway_listen_port" {
+  type    = number
+  default = 80
+}
+
+variable "allow_cidr" {
+  type    = string
+  default = ""
 }

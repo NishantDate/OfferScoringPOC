@@ -1,6 +1,8 @@
 locals {
-  name      = "${var.project}-${var.env}"
-  public_sn = cidrsubnet(var.vpc_cidr, 8, 0) # /24 from the /16
+  name       = "${var.project}-${var.env}"
+  public_sn  = cidrsubnet(var.vpc_cidr, 8, 0) # /24 from the /16
+  public_sn2 = cidrsubnet(var.vpc_cidr, 8, 1) # 10.0.1.0/24
+  istio_chart_url     = "https://istio-release.storage.googleapis.com/charts"
 }
 
 data "aws_caller_identity" "current" {}
@@ -20,11 +22,11 @@ module "vpc" {
   name = "${local.name}-vpc"
   cidr = var.vpc_cidr
 
-  azs             = [var.az]
-  public_subnets  = [local.public_sn]
-  private_subnets = []                # none
-  enable_nat_gateway = false          # no NAT (cheap)
-  single_nat_gateway = false
+  azs                  = var.azs
+  public_subnets       = [local.public_sn, local.public_sn2]
+  private_subnets      = []    # none
+  enable_nat_gateway   = false # no NAT (cheap)
+  single_nat_gateway   = false
   enable_dns_hostnames = true
   enable_dns_support   = true
 
@@ -46,29 +48,112 @@ module "eks" {
 
   enable_irsa = true
 
-  cluster_endpoint_public_access  = true
-  cluster_endpoint_private_access = false
+  cluster_endpoint_public_access           = true
+  cluster_endpoint_private_access          = false
+  enable_cluster_creator_admin_permissions = true
+
 
   # Minimal add-ons (you can pin versions if you want)
   cluster_addons = {
-    coredns   = {}
+    coredns    = {}
     kube-proxy = {}
-    vpc-cni   = {}
+    vpc-cni    = {}
   }
-
+  node_security_group_additional_rules = {
+    ingress_15017 = {
+      description                   = "Cluster API - Istio Webhook namespace.sidecar-injector.istio.io"
+      protocol                      = "TCP"
+      from_port                     = 15017
+      to_port                       = 15017
+      type                          = "ingress"
+      source_cluster_security_group = true
+    }
+    ingress_15012 = {
+      description                   = "Cluster API to nodes ports/protocols"
+      protocol                      = "TCP"
+      from_port                     = 15012
+      to_port                       = 15012
+      type                          = "ingress"
+      source_cluster_security_group = true
+    }
+  }
   # One tiny managed node group on Graviton + AL2023
   eks_managed_node_groups = {
     default = {
-      name            = "ng-1"
-      ami_type        = "AL2023_ARM_64_STANDARD" # Graviton + AL2023 (matches our cheap plan). :contentReference[oaicite:2]{index=2}
-      capacity_type   = "ON_DEMAND"
-      instance_types  = [var.instance_type]
-      min_size        = 1
-      desired_size    = 1
-      max_size        = 1
-      disk_size       = var.node_disk_gb
-      labels          = { arch = "arm64" }
-      subnet_ids      = module.vpc.public_subnets
+      name           = "ng-1"
+      ami_type       = "AL2023_ARM_64_STANDARD" # Graviton + AL2023 (matches our cheap plan). :contentReference[oaicite:2]{index=2}
+      capacity_type  = "ON_DEMAND"
+      instance_types = [var.instance_type]
+      min_size       = 1
+      desired_size   = 1
+      max_size       = 1
+      disk_size      = var.node_disk_gb
+      labels         = { arch = "arm64" }
+      subnet_ids     = module.vpc.public_subnets
+    }
+  }
+}
+
+module "eks_blueprints_addons" {
+  source  = "aws-ia/eks-blueprints-addons/aws"
+  version = "~> 1.21.0"
+
+  cluster_name      = module.eks.cluster_name
+  cluster_endpoint  = module.eks.cluster_endpoint
+  cluster_version   = module.eks.cluster_version
+  oidc_provider_arn = module.eks.oidc_provider_arn
+
+  helm_releases = {
+    istio-base = {
+      chart         = "base"
+      chart_version = var.istio_chart_version
+      repository    = local.istio_chart_url
+      name          = "istio-base"
+      namespace     = "istio-system"
+      create_namespace = true
+    }
+
+    istiod = {
+      chart         = "istiod"
+      chart_version = var.istio_chart_version
+      repository    = local.istio_chart_url
+      name          = "istiod"
+      namespace     = "istio-system"
+      create_namespace = true
+
+      set = [
+        {
+          name  = "meshConfig.accessLogFile"
+          value = "/dev/stdout"
+        }
+      ]
+    }
+
+    istio-ingress = {
+      chart            = "gateway"
+      chart_version    = var.istio_chart_version
+      repository       = local.istio_chart_url
+      name             = "istio-ingress"
+      namespace        = "istio-ingress" # per https://github.com/istio/istio/blob/master/manifests/charts/gateways/istio-ingress/values.yaml#L2
+      create_namespace = true
+
+      values = [
+        yamlencode(
+          {
+            labels = {
+              istio = "ingressgateway"
+            }
+            service = {
+              annotations = {
+                "service.beta.kubernetes.io/aws-load-balancer-type"            = "external"
+                "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type" = "ip"
+                "service.beta.kubernetes.io/aws-load-balancer-scheme"          = "internet-facing"
+                "service.beta.kubernetes.io/aws-load-balancer-attributes"      = "load_balancing.cross_zone.enabled=true"
+              }
+            }
+          }
+        )
+      ]
     }
   }
 }
